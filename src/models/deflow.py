@@ -14,7 +14,7 @@ import dztimer, torch
 
 from .basic.unet import FastFlow3DUNet
 from .basic.encoder import DynamicEmbedder
-from .basic.decoder import LinearDecoder, ConvGRUDecoder
+from .basic.decoder import LinearDecoder, MaskConvGRUDecoder
 from .basic import cal_pose0to1
 
 class DeFlow(nn.Module):
@@ -31,7 +31,7 @@ class DeFlow(nn.Module):
         
         self.backbone = FastFlow3DUNet()
         if decoder_option == "gru":
-            self.head = ConvGRUDecoder(num_iters = num_iters)
+            self.head = MaskConvGRUDecoder(num_iters = num_iters)
         elif decoder_option == "linear":
             self.head = LinearDecoder()
 
@@ -89,7 +89,7 @@ class DeFlow(nn.Module):
         self.timer[2].stop()
 
         self.timer[3].start("Decoder")
-        flows = self.head(
+        flows, masks0 = self.head(
             torch.cat((pc0_before_pseudoimages, pc1_before_pseudoimages),
                     dim=1), grid_flow_pseudoimage, pc0_voxel_infos_lst)
         self.timer[3].stop()
@@ -99,10 +99,10 @@ class DeFlow(nn.Module):
 
         pc0_valid_point_idxes = [e["point_idxes"] for e in pc0_voxel_infos_lst]
         pc1_valid_point_idxes = [e["point_idxes"] for e in pc1_voxel_infos_lst]
-
         model_res = {
             "flow": flows,
             'pose_flow': pose_flows,
+            "masks0": masks0,
 
             "pc0_valid_point_idxes": pc0_valid_point_idxes,
             "pc0_points_lst": pc0_points_lst,

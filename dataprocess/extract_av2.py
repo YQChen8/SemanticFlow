@@ -268,11 +268,11 @@ def process_logs(data_dir: Path, output_dir: Path, nproc: int):
             res = list(tqdm(p.imap_unordered(proc, args), total=len(logs), ncols=120))
 
 def main(
-    argo_dir: str = "/home/kin/data/av2",
-    output_dir: str ="/home/kin/data/av2/preprocess",
+    argo_dir: str = "~/nas/av2",
+    output_dir: str ="~/nas/av2/preprocess",
     av2_type: str = "sensor",
     data_mode: str = "val",
-    mask_dir: str = "/home/kin/data/av2/3d_scene_flow",
+    mask_dir: str = "~/nas/av2/3d_scene_flow",
     nproc: int = (multiprocessing.cpu_count() - 1),
     only_index: bool = False,
 ):

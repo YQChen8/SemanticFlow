@@ -13,14 +13,153 @@ import torch
 from assets.cuda.chamfer3D import nnChamferDis
 MyCUDAChamferDis = nnChamferDis()
 from src.utils.av2_eval import CATEGORY_TO_INDEX, BUCKETED_METACATAGORIES
+import torch.nn.functional as F
+from pointnet2.pointnet2 import *
 
 # NOTE(Qingwen 24/07/06): squared, so it's sqrt(4) = 2m, in 10Hz the vel = 20m/s ~ 72km/h
 # If your scenario is different, may need adjust this TRUNCATED to 80-120km/h vel.
 TRUNCATED_DIST = 4
 
+def fit_motion_svd_batch(pc1, pc2, mask=None):
+    """
+    :param pc1: (B, N, 3) torch.Tensor.
+    :param pc2: (B, N, 3) torch.Tensor.
+    :param mask: (B, N) torch.Tensor.
+    :return:
+        R_base: (B, 3, 3) torch.Tensor.
+        t_base: (B, 3) torch.Tensor.
+    """
+    n_batch, n_point, _ = pc1.size()
+
+    if mask is None:
+        pc1_mean = torch.mean(pc1, dim=1, keepdim=True)   # (B, 1, 3)
+        pc2_mean = torch.mean(pc2, dim=1, keepdim=True)   # (B, 1, 3)
+    else:
+        pc1_mean = torch.einsum('bnd,bn->bd', pc1, mask) / torch.sum(mask, dim=1, keepdim=True)   # (B, 3)
+        pc1_mean.unsqueeze_(1)
+        pc2_mean = torch.einsum('bnd,bn->bd', pc2, mask) / torch.sum(mask, dim=1, keepdim=True)
+        pc2_mean.unsqueeze_(1)
+
+    pc1_centered = pc1 - pc1_mean
+    pc2_centered = pc2 - pc2_mean
+
+    if mask is None:
+        S = torch.bmm(pc1_centered.transpose(1, 2), pc2_centered)
+    else:
+        # 用逐元素乘法替代对角矩阵
+        weighted_pc1 = pc1_centered * mask.unsqueeze(-1)
+        S = weighted_pc1.transpose(1, 2).bmm(pc2_centered)
+        # S = pc1_centered.transpose(1, 2).bmm(torch.diag_embed(mask).bmm(pc2_centered))
+
+    # If mask is not well-defined, S will be ill-posed.
+    # We just return an identity matrix.
+    valid_batches = ~torch.isnan(S).any(dim=1).any(dim=1)
+    R_base = torch.eye(3, device=pc1.device).unsqueeze(0).repeat(n_batch, 1, 1)
+    t_base = torch.zeros((n_batch, 3), device=pc1.device)
+
+    if valid_batches.any():
+        S = S[valid_batches, ...]
+        u, s, v = torch.svd(S, some=False, compute_uv=True)
+        R = torch.bmm(v, u.transpose(1, 2))
+        det = torch.det(R)
+
+        # Correct reflection matrix to rotation matrix
+        diag = torch.ones_like(S[..., 0], requires_grad=False)
+        diag[:, 2] = det
+        R = v.bmm(torch.diag_embed(diag).bmm(u.transpose(1, 2)))
+
+        pc1_mean, pc2_mean = pc1_mean[valid_batches], pc2_mean[valid_batches]
+        t = pc2_mean.squeeze(1) - torch.bmm(R, pc1_mean.transpose(1, 2)).squeeze(2)
+
+        R_base[valid_batches] = R
+        t_base[valid_batches] = t
+
+    return R_base, t_base
+def rigidLoss(pc, mask, flow):
+        # pc = pc.unsqueeze(0)
+        # if mask is not None:
+        #     mask = mask.unsqueeze(0)
+        # flow = flow.unsqueeze(0)
+        """
+        :param pc: (B, N, 3) torch.Tensor.
+        :param mask: (B, N, K) torch.Tensor.
+        :param flow: (B, N, 3) torch.Tensor.
+        :return:
+            loss: () torch.Tensor.
+        """
+
+        n_batch, n_point, n_object = mask.size()
+        pc2 = pc + flow
+        mask = mask.transpose(1, 2).reshape(n_batch * n_object, n_point)
+        pc_rep = pc.unsqueeze(1).repeat(1, n_object, 1, 1).reshape(n_batch * n_object, n_point, 3)
+        pc2_rep = pc2.unsqueeze(1).repeat(1, n_object, 1, 1).reshape(n_batch * n_object, n_point, 3)
+
+        # Estimate the rigid transformation
+        object_R, object_t = fit_motion_svd_batch(pc_rep, pc2_rep, mask)
+
+        # Apply the estimated rigid transformation onto point cloud
+        pc_transformed = torch.einsum('bij,bnj->bni', object_R, pc_rep) + object_t.unsqueeze(1).repeat(1, n_point, 1)
+        pc_transformed = pc_transformed.reshape(n_batch, n_object, n_point, 3).detach()
+        mask = mask.reshape(n_batch, n_object, n_point)
+
+        # Measure the discrepancy of per-point flow
+        mask = mask.unsqueeze(-1)
+        pc_transformed = (mask * pc_transformed).sum(1)
+        loss = (pc_transformed - pc2).norm(p=2, dim=-1)
+        return loss.mean()
+
+def KnnLoss(pc, mask, k=32, radius=1, cross_entropy=False, loss_norm=1):
+    """
+    :param pc: (B, N, 3) torch.Tensor.
+    :param mask: (B, N, K) torch.Tensor.
+    :return:
+        loss: () torch.Tensor.
+    """
+    mask = mask.permute(0, 2, 1).contiguous()
+    dist, idx = knn(k, pc, pc)
+    tmp_idx = idx[:, :, 0].unsqueeze(2).repeat(1, 1, k).to(idx.device)
+    idx[dist > radius] = tmp_idx[dist > radius]
+    nn_mask = grouping_operation(mask, idx.detach())
+    if cross_entropy:
+        mask = mask.unsqueeze(3).repeat(1, 1, 1, k).detach()
+        loss = F.binary_cross_entropy(nn_mask, mask, reduction='none').sum(dim=1).mean(dim=-1)
+    else:
+        loss = (mask.unsqueeze(3) - nn_mask).norm(p=loss_norm, dim=1).mean(dim=-1)
+    return loss.mean()
+
+
+def BallQLoss(pc, mask, k=64, radius=2, cross_entropy=False, loss_norm=1):
+    """
+    :param pc: (B, N, 3) torch.Tensor.
+    :param mask: (B, N, K) torch.Tensor.
+    :return:
+        loss: () torch.Tensor.
+    """
+    mask = mask.permute(0, 2, 1).contiguous()
+    idx = ball_query(radius, k, pc, pc)
+    nn_mask = grouping_operation(mask, idx.detach())
+    if cross_entropy:
+        mask = mask.unsqueeze(3).repeat(1, 1, 1, k).detach()
+        loss = F.binary_cross_entropy(nn_mask, mask, reduction='none').sum(dim=1).mean(dim=-1)
+    else:
+        loss = (mask.unsqueeze(3) - nn_mask).norm(p=loss_norm, dim=1).mean(dim=-1)
+    return loss.mean()
+
+def SmoothLoss(pc, mask, w_knn=3, w_ball_q=1):
+    """
+    :param pc: (B, N, 3) torch.Tensor.
+    :param mask: (B, N, K) torch.Tensor.
+    :return:
+        loss: () torch.Tensor.
+    """
+    loss = (w_knn * KnnLoss(pc, mask)) + (w_ball_q * BallQLoss(pc, mask))
+    return loss
+
 
 def seflowLoss(res_dict, timer=None):
-    pc0_label = res_dict['pc0_labels']
+    pc0_mask = res_dict['est_mask0']
+    # pc0_label = res_dict['pc0_labels']
+    pc0_label = pc0_mask.argmax(dim=1)
     pc1_label = res_dict['pc1_labels']
 
     pc0 = res_dict['pc0']
@@ -91,11 +230,21 @@ def seflowLoss(res_dict, timer=None):
         moved_cluster_loss = torch.mean(raw_dist0[raw_dist0 <= TRUNCATED_DIST]) + torch.mean(raw_dist1[raw_dist1 <= TRUNCATED_DIST])
     # timer[5][3].stop()
 
+    # rigid loss 12445016
+    pc0 = pc0.unsqueeze(0)
+    pc0_mask = pc0_mask.unsqueeze(0)
+    est_flow = est_flow.unsqueeze(0)
+    rigid_loss = rigidLoss(pc0, pc0_mask, est_flow)
+    # smooth_loss = SmoothLoss(pc0, pc0_mask)
+    smooth_loss = torch.tensor(0.0, device=est_flow.device)
+
     res_loss = {
         'chamfer_dis': chamfer_dis,
         'dynamic_chamfer_dis': dynamic_chamfer_dis,
         'static_flow_loss': static_cluster_loss,
         'cluster_based_pc0pc1': moved_cluster_loss,
+        'rigid_loss': rigid_loss,
+        'smooth_loss': smooth_loss,
     }
     return res_loss
 

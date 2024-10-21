@@ -42,7 +42,7 @@ def main(cfg):
     checkpoint_params = DictConfig(torch_load_ckpt["hyper_parameters"])
     cfg.output = checkpoint_params.cfg.output + f"-e{torch_load_ckpt['epoch']}-{cfg.av2_mode}-v{cfg.leaderboard_version}"
     cfg.model.update(checkpoint_params.cfg.model)
-    
+ 
     mymodel = ModelWrapper.load_from_checkpoint(cfg.checkpoint, cfg=cfg, eval=True)
     print(f"\n---LOG[eval]: Loaded model from {cfg.checkpoint}. The backbone network is {checkpoint_params.cfg.model.name}.\n")
 

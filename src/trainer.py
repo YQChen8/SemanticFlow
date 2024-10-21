@@ -102,7 +102,7 @@ class ModelWrapper(LightningModule):
 
         if self.cfg_loss_name in ['seflowLoss']:
             loss_items, weights = zip(*[(key, weight) for key, weight in self.add_seloss.items()])
-            loss_logger = {'chamfer_dis': 0.0, 'dynamic_chamfer_dis': 0.0, 'static_flow_loss': 0.0, 'cluster_based_pc0pc1': 0.0}
+            loss_logger = {'chamfer_dis': 0.0, 'dynamic_chamfer_dis': 0.0, 'static_flow_loss': 0.0, 'cluster_based_pc0pc1': 0.0, 'rigid_loss': 0.0, 'smooth_loss': 0.0}
         else:
             loss_items, weights = ['loss'], [1.0]
             loss_logger = {'loss': 0.0}
@@ -116,6 +116,7 @@ class ModelWrapper(LightningModule):
         batch_sizes = len(batch["pose0"])
         pose_flows = res_dict['pose_flow']
         est_flow = res_dict['flow']
+        est_mask0 = res_dict['masks0']
         
         for batch_id in range(batch_sizes):
             pc0_valid_from_pc2res = pc0_valid_idx[batch_id]
@@ -124,7 +125,9 @@ class ModelWrapper(LightningModule):
 
             dict2loss = {'est_flow': est_flow[batch_id], 
                         'gt_flow': None if 'flow' not in batch else batch['flow'][batch_id][pc0_valid_from_pc2res] - pose_flow_, 
-                        'gt_classes': None if 'flow_category_indices' not in batch else batch['flow_category_indices'][batch_id][pc0_valid_from_pc2res]}
+                        'gt_classes': None if 'flow_category_indices' not in batch else batch['flow_category_indices'][batch_id][pc0_valid_from_pc2res],
+                        'est_mask0': est_mask0[batch_id],
+                        }
             
             if 'pc0_dynamic' in batch:
                 dict2loss['pc0_labels'] = batch['pc0_dynamic'][batch_id][pc0_valid_from_pc2res]

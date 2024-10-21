@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 from typing import List, Tuple, Dict
 from . import ConvWithNorms
+# from transformers import MaskFormerModel, MaskFormerConfig
+# import torch.nn.functional as F
 
 SPLIT_BATCH_SIZE = 512
 
@@ -218,3 +220,79 @@ class ConvWithNorms(nn.Module):
         else:
             batchnorm_res = self.batchnorm(conv_res)
         return self.nonlinearity(batchnorm_res)
+    
+
+#12445016
+class MaskConvGRUDecoder(nn.Module):
+
+    def __init__(self, pseudoimage_channels: int = 64, num_iters: int = 4, num_classes: int = 16):
+        super().__init__()
+        self.num_classes = num_classes   
+
+        self.offset_encoder = nn.Linear(3, pseudoimage_channels)
+
+        # ConvGRU层
+        self.gru = ConvGRU(input_dim=pseudoimage_channels, hidden_dim=pseudoimage_channels * 2)
+
+        # Decoder部分，包括流预测
+        self.decoder = nn.Sequential(
+            nn.Linear(pseudoimage_channels * 3, pseudoimage_channels // 2), 
+            nn.GELU(),
+            nn.Linear(pseudoimage_channels // 2, 3)  # 流预测输出
+        )
+              
+
+        # 添加无监督分类的线性层
+        self.classifier_decoder = nn.Sequential(
+            nn.Linear(pseudoimage_channels * 3, num_classes)
+            # nn.Linear(pseudoimage_channels * 3, pseudoimage_channels * 2), 
+            # nn.GELU(),
+            # nn.Linear(pseudoimage_channels * 2, pseudoimage_channels),
+            # nn.GELU(),
+            # nn.Linear(pseudoimage_channels, num_classes)
+        )
+
+
+        self.num_iters = num_iters
+
+    def forward_single(self, before_pseudoimage: torch.Tensor,
+                       after_pseudoimage: torch.Tensor,
+                       point_offsets: torch.Tensor,
+                       voxel_coords: torch.Tensor) -> Dict[str, torch.Tensor]:
+        voxel_coords = voxel_coords.long()
+
+        after_voxel_vectors = after_pseudoimage[:, voxel_coords[:, 1], voxel_coords[:, 2]].T
+        # print('before_pseudoimage',before_pseudoimage.shape)
+        before_voxel_vectors = before_pseudoimage[:, voxel_coords[:, 1], voxel_coords[:, 2]].T
+
+        concatenated_vectors = torch.cat([before_voxel_vectors, after_voxel_vectors], dim=1)
+        point_offsets_feature = self.offset_encoder(point_offsets)
+
+        concatenated_vectors = concatenated_vectors.unsqueeze(2)
+        
+
+        for itr in range(self.num_iters):
+            concatenated_vectors = self.gru(concatenated_vectors, point_offsets_feature.unsqueeze(2))
+
+        # 流预测
+        flow = self.decoder(torch.cat([concatenated_vectors.squeeze(2), point_offsets_feature], dim=1))
+        
+        # 分类预测
+        class_ids_0 = self.classifier_decoder(torch.cat([concatenated_vectors.squeeze(2), point_offsets_feature], dim=1))
+
+        return flow, class_ids_0 # 返回流和分类结果
+
+    def forward(self, before_pseudoimages: torch.Tensor,
+                after_pseudoimages: torch.Tensor,
+                voxelizer_infos: List[Dict[str, torch.Tensor]]) -> List[Dict[str, torch.Tensor]]:
+
+        flow_results = []
+        mask_results_0 = []
+        for before_pseudoimage, after_pseudoimage, voxelizer_info in zip(
+                before_pseudoimages, after_pseudoimages, voxelizer_infos):
+            point_offsets = voxelizer_info["point_offsets"]
+            voxel_coords = voxelizer_info["voxel_coords"]
+            flow, seg0 = self.forward_single(before_pseudoimage, after_pseudoimage, point_offsets, voxel_coords)
+            flow_results.append(flow)
+            mask_results_0.append(seg0)
+        return flow_results, mask_results_0
