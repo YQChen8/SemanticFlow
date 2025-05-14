@@ -197,3 +197,7 @@ The computations were enabled by the supercomputing resource Berzelius provided 
 
 ❤️: [DeFlow](https://github.com/KTH-RPL/DeFlow), [BucketedSceneFlowEval](https://github.com/kylevedder/BucketedSceneFlowEval)
 
+# 12445016
+python tools/visualization_save_carla.py --res_name 'est_label0' --data_dir /home2/chenyq/carla_scene_flow2/val/record2023_0308_1524/rm_road/SF/10
+python save_carla.py checkpoint=/home3/hqlab/chenyq/project/SeFlow/logs/jobs/seflow-1/04-24-09-56/checkpoints/last.ckpt
+python train_carla.py model=deflow lr=2e-4 epochs=1000 batch_size=2 loss_fn=seflowLoss add_seloss="{chamfer_dis: 1.0, static_flow_loss: 1.0, dynamic_chamfer_dis: 1.0, cluster_based_pc0pc1: 1.0, rigid_loss: 1.0, smooth_loss:0.5, mask_loss:0.0, bf_mask_loss:0.1, fg_consistent:5.0}" model.target.num_iters=2 model.val_monitor=val/Dynamic/Mean

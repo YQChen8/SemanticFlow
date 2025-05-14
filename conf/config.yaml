@@ -3,19 +3,19 @@ defaults:
   - hydra: default
   - model: deflow
   
-slurm_id: 00000
+slurm_id: 01113
 
-wandb_mode: offline # [offline, disabled, online]
-wandb_project_name: seflow
+wandb_mode: online # [offline, disabled, online]
+wandb_project_name: semantic-flow
 
 # train_data: /home3/hqlab/chenyq/project/SeFlow/data/av2/preprocess_v2/sensor/train
 # val_data: /home3/hqlab/chenyq/project/SeFlow/data/av2/preprocess_v2/sensor/val
-train_data: /home3/hqlab/chenyq/nas/av2/preprocess_v2/sensor/train
-val_data: /home3/hqlab/chenyq/nas/av2/preprocess_v2/sensor/val
+train_data: /dataset/public_dataset_nas2/av2/preprocess_v2/sensor/train
+val_data: /dataset/public_dataset_nas2/av2/preprocess_v2/sensor/val
 
 output: ${model.name}-${slurm_id}
 
-checkpoint: 
+checkpoint:
 pretrained_weights: 
 eval_only: False
 
@@ -34,9 +34,9 @@ add_seloss: # {chamfer_dis: 1.0, static_flow_loss: 1.0, dynamic_chamfer_dis: 1.0
 
 # log settings
 seed: 42069
-log_every: 10 # steps epochs*dataset_size/batch_size
-val_every: 3 # epochs
-save_top_model: 5 # top_k model will be saved.
+log_every: 1 # steps epochs*dataset_size/batch_size
+val_every: 1 # epochs
+save_top_model: 3 # top_k model will be saved.
 
 # -----> Model and Task Parameters
 voxel_size: [0.2, 0.2, 6]

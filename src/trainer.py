@@ -102,7 +102,8 @@ class ModelWrapper(LightningModule):
 
         if self.cfg_loss_name in ['seflowLoss']:
             loss_items, weights = zip(*[(key, weight) for key, weight in self.add_seloss.items()])
-            loss_logger = {'chamfer_dis': 0.0, 'dynamic_chamfer_dis': 0.0, 'static_flow_loss': 0.0, 'cluster_based_pc0pc1': 0.0, 'rigid_loss': 0.0, 'smooth_loss': 0.0}
+            loss_logger = {'chamfer_dis': 0.0, 'dynamic_chamfer_dis': 0.0, 'static_flow_loss': 0.0, 'cluster_based_pc0pc1': 0.0, 'rigid_loss': 0.0, 'smooth_loss': 0.0, 'mask_loss': 0.0, 'bf_mask_loss': 0.0, 'fg_consistent': 0.0}
+            # loss_logger = {'chamfer_dis': 0.0, 'dynamic_chamfer_dis': 0.0, 'static_flow_loss': 0.0, 'cluster_based_pc0pc1': 0.0, 'rigid_loss': 0.0, 'smooth_loss': 0.0, 'mask_loss': 0.0, 'bs_mask_loss': 0.0}
         else:
             loss_items, weights = ['loss'], [1.0]
             loss_logger = {'loss': 0.0}
@@ -161,7 +162,7 @@ class ModelWrapper(LightningModule):
             for batch_id, gt_flow in enumerate(batch["flow"]):
                 valid_from_pc2res = res_dict['pc0_valid_point_idxes'][batch_id]
                 pose_flow = pose_flows[batch_id][valid_from_pc2res]
-
+                # final_flow_ = res_dict['flow'][batch_id]
                 final_flow_ = pose_flow.clone() + res_dict['flow'][batch_id]
                 v1_dict= evaluate_leaderboard(final_flow_, pose_flow, batch['pc0'][batch_id][valid_from_pc2res], gt_flow[valid_from_pc2res], \
                                            batch['flow_is_valid'][batch_id][valid_from_pc2res], batch['flow_category_indices'][batch_id][valid_from_pc2res])
@@ -220,21 +221,25 @@ class ModelWrapper(LightningModule):
             print(f"python tools/visualization.py --res_name '{self.vis_name}' --data_dir {self.dataset_path}")
             print(f"Enjoy! ^v^ ------ \n")
         
-    def eval_only_step_(self, batch, res_dict):
+    def eval_only_step_(self, batch, res_dict,ground_data):
         eval_mask = batch['eval_mask'].squeeze()
         pc0 = batch['origin_pc0']
         pose_0to1 = cal_pose0to1(batch["pose0"], batch["pose1"])
         transform_pc0 = pc0 @ pose_0to1[:3, :3].T + pose_0to1[:3, 3]
         pose_flow = transform_pc0 - pc0
-
+        # final_flow = res_dict['flow']
         final_flow = pose_flow.clone()
         if 'pc0_valid_point_idxes' in res_dict:
             valid_from_pc2res = res_dict['pc0_valid_point_idxes']
-
+            if ground_data:
+                pred_flow = pose_flow.clone()
+                pred_flow[valid_from_pc2res] = res_dict['flow'] + pose_flow[valid_from_pc2res]
+                final_flow = pred_flow
+            else:
             # flow in the original pc0 coordinate
-            pred_flow = pose_flow[~batch['gm0']].clone()
-            pred_flow[valid_from_pc2res] = res_dict['flow'] + pose_flow[~batch['gm0']][valid_from_pc2res]
-            final_flow[~batch['gm0']] = pred_flow
+                pred_flow = pose_flow[~batch['gm0']].clone()
+                pred_flow[valid_from_pc2res] = res_dict['flow'] + pose_flow[~batch['gm0']][valid_from_pc2res]
+                final_flow[~batch['gm0']] = pred_flow
         else:
             final_flow[~batch['gm0']] = res_dict['flow'] + pose_flow[~batch['gm0']]
 
@@ -274,16 +279,57 @@ class ModelWrapper(LightningModule):
         res_dict = {key: res_dict[key][0] for key in res_dict if len(res_dict[key])>0}
         return batch, res_dict
     
+    def run_model_w_ground_data(self, batch):
+        # NOTE (Qingwen): only needed when val or test mode, since train we will go through collate_fn to remove.
+        batch['origin_pc0'] = batch['pc0'].clone()
+        # 移除地面数据的代码已被删除，以保留地面数据
+        # batch['pc0'] = batch['pc0']
+        # batch['pc1'] = batch['pc1']
+        # print(batch['pc0'].shape)
+        # exit()
+        
+        # if 'pcb0' in batch:
+            # 同样，移除地面数据的代码已被删除，以保留地面数据
+            # batch['pcb0'] = batch['pcb0'][~batch['gmb0']].unsqueeze(0)
+            # batch['pcb0'] = batch['pcb0'].unsqueeze(0)
+
+        self.model.timer[12].start("One Scan")
+        res_dict = self.model(batch)
+        self.model.timer[12].stop()
+
+        # NOTE (Qingwen): Since val and test, we will force set batch_size = 1 
+        batch = {key: batch[key][0] for key in batch if len(batch[key])>0}
+        res_dict = {key: res_dict[key][0] for key in res_dict if len(res_dict[key])>0}
+        # ground_indices_pc0 = torch.where(batch['gm0'])[0]  # 获取 pc0 中地面点的索引
+        # print(ground_indices_pc0.shape)
+        # res_dict['pc0_labels'][batch['gm0']] = 0
+        # exit
+        return batch, res_dict
+    
     def validation_step(self, batch, batch_idx):
         if self.av2_mode == 'val' or self.av2_mode == 'test':
-            batch, res_dict = self.run_model_wo_ground_data(batch)
-            self.eval_only_step_(batch, res_dict)
+            ground_data = False #12445016
+            # print(batch.keys())
+            # print(batch['scene_id'])
+            # print(batch['timestamp'])
+            # print(batch['pc0'].shape)
+            # print(batch['pose0'].shape)
+            # exit()
+            if ground_data:
+                batch, res_dict = self.run_model_w_ground_data(batch)
+            else:
+                batch, res_dict = self.run_model_wo_ground_data(batch)
+            self.eval_only_step_(batch, res_dict,ground_data)
         else:
             res_dict = self.model(batch)
             self.train_validation_step_(batch, res_dict)
 
     def test_step(self, batch, batch_idx):
-        batch, res_dict = self.run_model_wo_ground_data(batch)
+        ground_data = False #12445016
+        if ground_data:
+            batch, res_dict = self.run_model_w_ground_data(batch)
+        else:
+            batch, res_dict = self.run_model_wo_ground_data(batch)
         pc0 = batch['origin_pc0']
         pose_0to1 = cal_pose0to1(batch["pose0"], batch["pose1"])
         transform_pc0 = pc0 @ pose_0to1[:3, :3].T + pose_0to1[:3, 3]
@@ -292,22 +338,44 @@ class ModelWrapper(LightningModule):
         final_flow = pose_flow.clone()
         if 'pc0_valid_point_idxes' in res_dict:
             valid_from_pc2res = res_dict['pc0_valid_point_idxes']
+            if ground_data:
+                pred_flow = pose_flow.clone()
+                pred_flow[valid_from_pc2res] = pose_flow[valid_from_pc2res] + res_dict['flow']
 
+                final_flow = pred_flow
+            else:
             # flow in the original pc0 coordinate
-            pred_flow = pose_flow[~batch['gm0']].clone()
-            pred_flow[valid_from_pc2res] = pose_flow[~batch['gm0']][valid_from_pc2res] + res_dict['flow']
+                pred_flow = pose_flow[~batch['gm0']].clone()
+                pred_flow[valid_from_pc2res] = pose_flow[~batch['gm0']][valid_from_pc2res] + res_dict['flow']
 
-            final_flow[~batch['gm0']] = pred_flow
+                final_flow[~batch['gm0']] = pred_flow
+
+            
         else:
             final_flow[~batch['gm0']] = res_dict['flow'] + pose_flow[~batch['gm0']]
 
-        # write final_flow into the dataset.
+        # write final_flow and final label into the dataset.
+        init_label = torch.zeros(final_flow.shape[0]).to(final_flow.device)
+        final_label = init_label.clone()
+        pred_label = init_label[~batch['gm0']].clone()
+        pred_label[valid_from_pc2res] = init_label[~batch['gm0']][valid_from_pc2res] + torch.argmax(res_dict['masks0'], dim=1).float()
+        final_label[~batch['gm0']] = pred_label
+
+        # print(final_label.shape)
+        # print(final_label[~batch['gm0']].shape)
+        # print(final_label[~batch['gm0']][valid_from_pc2res].shape())
+        # exit()
+        # final_label[~batch['gm0']][valid_from_pc2res] = torch.argmax(res_dict['masks0'], dim=1).float()
+        print(final_label.unique())
         key = str(batch['timestamp'])
         scene_id = batch['scene_id']
         with h5py.File(os.path.join(self.dataset_path, f'{scene_id}.h5'), 'r+') as f:
             if self.vis_name in f[key]:
                 del f[key][self.vis_name]
+                del f[key]['est_label0']
+                # del f[key]['00_seflow']
             f[key].create_dataset(self.vis_name, data=final_flow.cpu().detach().numpy().astype(np.float32))
+            f[key].create_dataset('est_label0', data=final_label.cpu().detach().numpy().astype(np.float32))
 
     def on_test_epoch_end(self):
         self.model.timer.print(random_colors=False, bold=False)

@@ -142,7 +142,7 @@ class ConvGRU(nn.Module):
     
 class ConvGRUDecoder(nn.Module):
 
-    def __init__(self, pseudoimage_channels: int = 64, num_iters: int = 4):
+    def __init__(self, pseudoimage_channels: int = 64, num_iters: int = 5):
         super().__init__()
 
         self.offset_encoder = nn.Linear(3, pseudoimage_channels)
@@ -225,7 +225,7 @@ class ConvWithNorms(nn.Module):
 #12445016
 class MaskConvGRUDecoder(nn.Module):
 
-    def __init__(self, pseudoimage_channels: int = 64, num_iters: int = 4, num_classes: int = 16):
+    def __init__(self, pseudoimage_channels: int = 64, num_iters: int = 4, num_classes: int = 64): # 12445016 num_iters: int = 4
         super().__init__()
         self.num_classes = num_classes   
 
@@ -279,6 +279,7 @@ class MaskConvGRUDecoder(nn.Module):
         
         # 分类预测
         class_ids_0 = self.classifier_decoder(torch.cat([concatenated_vectors.squeeze(2), point_offsets_feature], dim=1))
+        class_ids_0 = class_ids_0.softmax(dim=-1)
 
         return flow, class_ids_0 # 返回流和分类结果
 
