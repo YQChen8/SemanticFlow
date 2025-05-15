@@ -64,3 +64,4 @@ tools/visualization_save_carla.py
 save_carla.py
 *.ckpt
 *.pth
+train copy.py
