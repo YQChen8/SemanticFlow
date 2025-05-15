@@ -1,0 +1,66 @@
+
+*.json
+logs/*
+*.pyc
+
+tmp_sbatch.sh
+*.log
+
+*.hydra
+
+*.h5
+
+*.zip
+
+cancel.sh
+
+# slurm log files
+*.err
+*.out
+
+# figure
+*.png
+*.pdf
+*ply
+
+# cuda build files
+*.egg-info
+build*
+dist*
+
+data/
+/logs
+*.ply
+conf/config_carla.yaml 
+conf/save_carla.yaml 
+conf/suscape.yaml 
+dataprocess/my_carla.py 
+output_11label/
+output_12_16_11lable/
+output_18label/ 
+output_backup/ 
+output_carla/ 
+output_initial label/
+output_last/ 
+output_suscape/ 
+output12_16_06/ 
+src/dataset_carla.py 
+src/lossfuncs copy 3.py 
+src/lossfuncs copy 4.py 
+src/lossfuncs copy.py 
+src/lossfuncs copy5.py 
+src/lossfuncs1106.py 
+src/lossfuncs1107.py 
+src/trainer copy 2.py 
+src/trainer copy.py 
+src/trainer_carla.py 
+eval_suscape copy 2.py 
+eval_suscape copy.py 
+eval_suscape.py train copy.py 
+train_carla.py 
+tools/visualization_save copy 2.py 
+tools/visualization_save copy.py 
+tools/visualization_save_carla.py 
+save_carla.py
+*.ckpt
+*.pth
